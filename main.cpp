@@ -41,12 +41,15 @@ void saveImage(T* image, int width, int height, std::string im_name){
     cv::imwrite(im_name, im);
 }
 
+void save2file(std::fstream *stream, std::string filtName, float STD, float MSE, float PSNR, float PSNRHVS, float PSNRHVSM, float time){
+    *stream << filtName << "," << std::to_string(STD) << "," << std::to_string(MSE) << "," << std::to_string(PSNR) << "," << std::to_string(PSNRHVS) << "," << std::to_string(PSNRHVSM) << "," << std::to_string(time) << std::endl;
+}
+
 int main() {
 
     std::string imname_path = "../T42TXR_20190313T060631_B05.jp2";
     std::string imname = "T42TXR_20190313T060631_B05";
-    const char *filename_metric = ("metrics_cpu" + imname + ".txt").c_str();
-    const char *filename_time = ("timefile_cpu" + imname + ".txt").c_str();
+    std::string filename_metric = "metrics_cpu" + imname + ".csv";
 
     unsigned int start = 0;
     unsigned int finish = 0;
@@ -94,16 +97,10 @@ int main() {
     image.width = image_width;
     image.height = image_height;
 
-    FILE *out_metric;
-    out_metric = fopen(filename_metric, "a+t");
+    std::fstream outFile;
+    outFile.open(filename_metric, std::ios::out);
 
-    fprintf(out_metric, "Filter name \tSTD \tMSE \t PSNR\t PSNR-HVS\t PSNR-HVS-M\n");
-
-    FILE *out_time;
-    out_time = fopen(filename_time, "a+t");
-
-    fprintf(out_time, "Filter name \tSTD \tExecute time\n");
-
+    outFile << "Filter_name" << "," << "Noise STD" << "," << "MSE" << "," << "PSNR" << "," << "PSNRHVS" << "," << "PSNRHVSM" << "," << "Execute time" << std::endl;
 
     float noise_variance[5] = {5, 10, 15, 20, 25};
 
@@ -122,7 +119,8 @@ int main() {
         auto *psnrhvs = PSNRHVSM(&image, &ideal_image);
         printf("MSE = %f\nPSNR = %f\nPSNRHVS = %f\nPSNRHVSM = %f\n", mse, psnr, psnrhvs[0], psnrhvs[1]);
 
-        fprintf(out_metric, "%11s \t%3.1f \t%4.2f \t %4.2f\t %5.3f\t %5.3f\n", "None", i, mse, psnr, psnrhvs[0], psnrhvs[1]);
+        save2file(&outFile, "None", i, mse, psnr, psnrhvs[0], psnrhvs[1], 0);
+
 
         printf("Denoising \n");
 
@@ -130,14 +128,11 @@ int main() {
         start = clock();
         MedFilter(image.data, image.width, image.height, 7);
         finish = clock();
-        fprintf(out_time, "%11s \t%3.1f \t%4.2f\n", "Median", i, (float(finish-start)/CLOCKS_PER_SEC));
         mse = MSE(&image, &ideal_image);
         psnr = PSNR(&ideal_image, &image);
         psnrhvs = PSNRHVSM(&image, &ideal_image);
         printf("MSE = %f\nPSNR = %f\nPSNRHVS = %f\nPSNRHVSM = %f\n", mse, psnr, psnrhvs[0], psnrhvs[1]);
-
-        fprintf(out_metric, "%11s \t%3.1f \t%4.2f \t %4.2f\t %5.3f\t %5.3f\n", "Median", i, mse, psnr, psnrhvs[0], psnrhvs[1]);
-
+        save2file(&outFile, "Median", i, mse, psnr, psnrhvs[0], psnrhvs[1], (float(finish-start)/CLOCKS_PER_SEC));
         saveImage(image.data, image_width, image_height, "Median_filter_" + std::to_string(i) + "_" + imname + ".png" );
 
         memcpy(image.data, noise_image.data, sizeof(uint8_t) * image_width * image_height); // Copy image
@@ -147,14 +142,11 @@ int main() {
         start = clock();
         LiFilter(image.data, image.width, image.height, 7, i);
         finish = clock();
-        fprintf(out_time, "%11s \t%3.1f \t%4.2f\n", "Li", i, (float(finish-start)/CLOCKS_PER_SEC));
         mse = MSE(&image, &ideal_image);
         psnr = PSNR(&ideal_image, &image);
         psnrhvs = PSNRHVSM(&image, &ideal_image);
         printf("MSE = %f\nPSNR = %f\nPSNRHVS = %f\nPSNRHVSM = %f\n", mse, psnr, psnrhvs[0], psnrhvs[1]);
-
-        fprintf(out_metric, "%11s \t%3.1f \t%4.2f \t %4.2f\t %5.3f\t %5.3f\n", "Li", i, mse, psnr, psnrhvs[0], psnrhvs[1]);
-
+        save2file(&outFile, "Li", i, mse, psnr, psnrhvs[0], psnrhvs[1], (float(finish-start)/CLOCKS_PER_SEC));
         saveImage(image.data, image_width, image_height, "Li_filter_" + std::to_string(i) + "_" + imname + ".png" );
         memcpy(image.data, noise_image.data, sizeof(uint8_t) * image_width * image_height); // Copy image
 
@@ -162,14 +154,11 @@ int main() {
         start = clock();
         FrostFilter(image.data, image.width, image.height);
         finish = clock();
-        fprintf(out_time, "%11s \t%3.1f \t%4.2f\n", "Frost", i, (float(finish-start)/CLOCKS_PER_SEC));
         mse = MSE(&image, &ideal_image);
         psnr = PSNR(&ideal_image, &image);
         psnrhvs = PSNRHVSM(&image, &ideal_image);
         printf("MSE = %f\nPSNR = %f\nPSNRHVS = %f\nPSNRHVSM = %f\n", mse, psnr, psnrhvs[0], psnrhvs[1]);
-
-        fprintf(out_metric, "%11s \t%3.1f \t%4.2f \t %4.2f\t %5.3f\t %5.3f\n", "Frost", i, mse, psnr, psnrhvs[0], psnrhvs[1]);
-
+        save2file(&outFile, "Frost", i, mse, psnr, psnrhvs[0], psnrhvs[1], (float(finish-start)/CLOCKS_PER_SEC));
         saveImage(image.data, image_width, image_height, "Frost_filter_" + std::to_string(i) + "_" + imname + ".png" );
 
         memcpy(image.data, noise_image.data, sizeof(uint8_t) * image_width * image_height); // Copy image
@@ -178,19 +167,16 @@ int main() {
         start = clock();
         DCTBasedFilter(&image, i, 8);
         finish = clock();
-        fprintf(out_time, "%11s \t%3.1f \t%4.2f\n", "DCTBased", i, (float(finish-start)/CLOCKS_PER_SEC));
         mse = MSE(&image, &ideal_image);
         psnr = PSNR(&ideal_image, &image);
         psnrhvs = PSNRHVSM(&image, &ideal_image);
         printf("MSE = %f\nPSNR = %f\nPSNRHVS = %f\nPSNRHVSM = %f\n", mse, psnr, psnrhvs[0], psnrhvs[1]);
-
-        fprintf(out_metric, "%11s \t%3.1f \t%4.2f \t %4.2f\t %5.3f\t %5.3f\n", "DCTBased", i, mse, psnr, psnrhvs[0], psnrhvs[1]);
+        save2file(&outFile, "DCTbased", i, mse, psnr, psnrhvs[0], psnrhvs[1], (float(finish-start)/CLOCKS_PER_SEC));
 
         saveImage(image.data, image_width, image_height, "DCTBased_filter_" + std::to_string(i) + "_" + imname + ".png" );
     }
 
-    fclose(out_metric);
-    fclose(out_time);
+    outFile.close();
 
     free(data);
     free(ideal_image.data);
