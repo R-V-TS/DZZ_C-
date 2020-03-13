@@ -8,6 +8,9 @@
 #ifndef CUDA_DZZ_SIMPLYFILTERS_H
 #define CUDA_DZZ_SIMPLYFILTERS_H
 
+
+
+
 void CudaFilter(Image* image_, unsigned short block_size, float SD, const std::string filterName);
 
 #endif //CUDA_DZZ_SIMPLYFILTERS_H

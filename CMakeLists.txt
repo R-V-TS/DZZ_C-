@@ -29,7 +29,7 @@ set(CMAKE_CXX_STANDARD 11)
 set(CUDA_INC_DIR /usr/local/cuda/include)
 
 
-add_executable(cuda_DZZ CudaOper/main.cpp CudaOper/SimplyFilters.cpp CudaOper/SimplyFilters.h ImageOperations.cpp)
+add_executable(cuda_DZZ CudaOper/main.cpp CudaOper/SimplyFilters.cpp CudaOper/SimplyFilters.h ImageOperations.cpp ImageQM.cpp DCT.cpp)
 include_directories(cuda_DZZ ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES} ${GDAL_INCLUDE_DIRS})
 target_link_libraries(cuda_DZZ ${OpenCV_LIBS} ${GDAL_LIBRARIES})
 set_source_files_properties(CudaOper/SimplyFilters.cpp PROPERTIES LANGUAGE CUDA)

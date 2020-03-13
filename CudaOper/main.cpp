@@ -9,6 +9,8 @@
 #include "./../utils.h"
 #include "./../Distort.h"
 #include "SimplyFilters.h"
+#include "../ImageQM.h"
+#include <ctime>
 
 
 template <typename T>
@@ -28,18 +30,40 @@ void displayImage(T* image, int width, int height){
     cv::imwrite("result.png", im);
 }
 
+template <typename T>
+void saveImage(T* image, int width, int height, std::string im_name){
+    cv::Mat im(width, height, CV_8U);
+
+    for(int i = 0; i < width*height; i++){
+        im.data[i] = image[i];
+        //printf("%i ", data[i]);
+    }
+    cv::imwrite(im_name, im);
+}
+
+void save2file(std::fstream *stream, std::string filtName, float STD, float MSE, float PSNR, float PSNRHVS, float PSNRHVSM, float time){
+    *stream << filtName << "," << std::to_string(STD) << "," << std::to_string(MSE) << "," << std::to_string(PSNR) << "," << std::to_string(PSNRHVS) << "," << std::to_string(PSNRHVSM) << "," << std::to_string(time) << std::endl;
+}
 
 int main() {
 
+    std::string imname_path = "../T42TXR_20190313T060631_B05.jp2";
+    std::string imname = "T42TXR_20190313T060631_B05";
+    std::string filename_metric = "metrics_gpu" + imname + ".csv";
+
+    unsigned int start = 0;
+    unsigned int finish = 0;
+
     GDALDataset *poDataset;
     GDALAllRegister();
+
     //Read image
-    poDataset = (GDALDataset *) GDALOpen("../T42TXR_20190313T060631_B05.jp2", GA_ReadOnly);
+    poDataset = (GDALDataset *) GDALOpen(imname_path.c_str(), GA_ReadOnly);
+
+    int image_width = 512;
+    int image_height = 512;
 
     GDALRasterBand *band = poDataset->GetRasterBand(1);
-    int width = band->GetXSize();
-    int height = band->GetYSize();
-    int dtype = band->GetRasterDataType();
 
     int nXSize = band->GetXSize();
     int nYsize = band->GetYSize();
@@ -47,32 +71,116 @@ int main() {
     //Type
     printf("DType = %i\n Size = %i, %i\n", band->GetRasterDataType(), nXSize, nYsize);
 
-    uint16_t* data = (uint16_t *) CPLMalloc(sizeof(uint16_t)*nXSize*nYsize);
-    band->RasterIO( GF_Read, 0, 0, nXSize, nYsize,
-                    data, nXSize, nYsize, band->GetRasterDataType(),
+    auto* data = (uint16_t *) CPLMalloc(sizeof(uint16_t)*image_width*image_height);
+
+    band->RasterIO( GF_Read, 512, 512, image_width, image_height,
+                    data, image_width, image_height, band->GetRasterDataType(),
                     0, 0 );
 
-    auto* norm_im = normalizationIm(data, nXSize*nYsize);
-    int im_size= 1700;
+    auto* norm_im = normalizationIm(data, image_height*image_width);
 
-    Image img;
-    img.data = new uint8_t[im_size * im_size];
-    img.width = im_size;
-    img.height = im_size;
+    saveImage(norm_im, image_width, image_height, "start_image"+imname+".png");
 
-    for(int i = 0; i < im_size; i++){
-        for(int j = 0; j < im_size; j++){
-            img.data[(i*im_size) + j] = norm_im[(i * nXSize) + j];
-        }
+    Image ideal_image{};
+    ideal_image.data = new uint8_t[(image_width + 4) * (image_height + 4)];
+    for(int i = 0; i <)
+    memcpy(ideal_image.data, norm_im, sizeof(uint8_t) * image_width * image_height);
+    ideal_image.width = image_width;
+    ideal_image.height = image_height;
+
+    Image noise_image{};
+    noise_image.data = new uint8_t[(image_width + 4) * (image_height + 4)];
+    noise_image.width = image_width;
+    noise_image.height = image_height;
+
+    Image image{};
+    image.data = new uint8_t[(image_width + 4) * (image_height + 4)];
+    image.width = image_width;
+    image.height = image_height;
+
+    std::fstream outFile;
+    outFile.open(filename_metric, std::ios::out);
+
+    outFile << "Filter_name" << "," << "Noise STD" << "," << "MSE" << "," << "PSNR" << "," << "PSNRHVS" << "," << "PSNRHVSM" << "," << "Execute time" << std::endl;
+
+    float noise_variance[5] = {5, 10, 15, 20, 25};
+
+    for(auto i : noise_variance) {
+        printf("STD = %f\n", i);
+        memcpy(noise_image.data, ideal_image.data, sizeof(uint8_t) * image_width * image_height);
+
+        printf("Add noise\n");
+        AWGN(&noise_image, i, 0);
+        memcpy(image.data, noise_image.data, sizeof(uint8_t) * image_width * image_height); // Copy image
+
+        saveImage(image.data, image_width, image_height, "noised_image_" + std::to_string(i) + "_" + imname + "_" + +".png");
+
+        auto mse = MSE(&image, &ideal_image);
+        auto psnr = PSNR(&ideal_image, &image);
+        auto *psnrhvs = PSNRHVSM(&image, &ideal_image);
+        printf("MSE = %f\nPSNR = %f\nPSNRHVS = %f\nPSNRHVSM = %f\n", mse, psnr, psnrhvs[0], psnrhvs[1]);
+
+        save2file(&outFile, "None", i, mse, psnr, psnrhvs[0], psnrhvs[1], 0);
+
+
+        printf("Denoising \n");
+
+        //Apply Median filter
+        start = clock();
+        CudaFilter(&image, 7, i, "Median");
+        finish = clock();
+        mse = MSE(&image, &ideal_image);
+        psnr = PSNR(&ideal_image, &image);
+        psnrhvs = PSNRHVSM(&image, &ideal_image);
+        printf("MSE = %f\nPSNR = %f\nPSNRHVS = %f\nPSNRHVSM = %f\n", mse, psnr, psnrhvs[0], psnrhvs[1]);
+        save2file(&outFile, "Median", i, mse, psnr, psnrhvs[0], psnrhvs[1], (float(finish-start)/CLOCKS_PER_SEC));
+        saveImage(image.data, image_width, image_height, "Median_filter_" + std::to_string(i) + "_" + imname + ".png" );
+
+        memcpy(image.data, noise_image.data, sizeof(uint8_t) * image_width * image_height); // Copy image
+
+
+        //Apply Li filter
+        start = clock();
+        CudaFilter(&image, 7, i, "Li");
+        finish = clock();
+        mse = MSE(&image, &ideal_image);
+        psnr = PSNR(&ideal_image, &image);
+        psnrhvs = PSNRHVSM(&image, &ideal_image);
+        printf("MSE = %f\nPSNR = %f\nPSNRHVS = %f\nPSNRHVSM = %f\n", mse, psnr, psnrhvs[0], psnrhvs[1]);
+        save2file(&outFile, "Li", i, mse, psnr, psnrhvs[0], psnrhvs[1], (float(finish-start)/CLOCKS_PER_SEC));
+        saveImage(image.data, image_width, image_height, "Li_filter_" + std::to_string(i) + "_" + imname + ".png" );
+        memcpy(image.data, noise_image.data, sizeof(uint8_t) * image_width * image_height); // Copy image
+
+        //Apply Frost filter
+        start = clock();
+        CudaFilter(&image, 3, i, "Frost");
+        finish = clock();
+        mse = MSE(&image, &ideal_image);
+        psnr = PSNR(&ideal_image, &image);
+        psnrhvs = PSNRHVSM(&image, &ideal_image);
+        printf("MSE = %f\nPSNR = %f\nPSNRHVS = %f\nPSNRHVSM = %f\n", mse, psnr, psnrhvs[0], psnrhvs[1]);
+        save2file(&outFile, "Frost", i, mse, psnr, psnrhvs[0], psnrhvs[1], (float(finish-start)/CLOCKS_PER_SEC));
+        saveImage(image.data, image_width, image_height, "Frost_filter_" + std::to_string(i) + "_" + imname + ".png" );
+
+        memcpy(image.data, noise_image.data, sizeof(uint8_t) * image_width * image_height); // Copy image
+
+        //Apply DCTBased filter
+        start = clock();
+        CudaFilter(&image, 8, i, "DCT");
+        finish = clock();
+        mse = MSE(&image, &ideal_image);
+        psnr = PSNR(&ideal_image, &image);
+        psnrhvs = PSNRHVSM(&image, &ideal_image);
+        printf("MSE = %f\nPSNR = %f\nPSNRHVS = %f\nPSNRHVSM = %f\n", mse, psnr, psnrhvs[0], psnrhvs[1]);
+        save2file(&outFile, "DCTbased", i, mse, psnr, psnrhvs[0], psnrhvs[1], (float(finish-start)/CLOCKS_PER_SEC));
+
+        saveImage(image.data, image_width, image_height, "DCTBased_filter_" + std::to_string(i) + "_" + imname + ".png" );
     }
 
-    AWGN(img.data, img.width*img.height, 35, 0);
-
-    CudaFilter(&img, 3, 35, "Frost");
-
-
-    displayImage(img.data, img.width, img.height);
+    outFile.close();
 
     free(data);
-    return 0;
+    free(ideal_image.data);
+    free(image.data);
+    free(noise_image.data);
 }

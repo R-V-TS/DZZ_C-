@@ -10,6 +10,10 @@
 #include <cstdio>
 #include <string>
 #include <cmath>
+#include <cstring>
+#include "../DCT.h"
+
+
 
 __device__ void swap(uint8_t* one, uint8_t* two){
     uint8_t tmp = *one;
@@ -63,6 +67,18 @@ __device__ float localMean(uint8_t* array, uint32_t length){
         sum += array[i];
     }
     return sum/length;
+}
+
+__device__ void MultiplyMatrix(float *matrix1, float *matrix2, float *result, uint16_t window_size){
+    float sum = 0;
+    for(int i = 0; i < window_size; i++)
+        for(int j = 0; j < window_size; j++) {
+            for(int k = 0; k < window_size; k++){
+                sum += *(matrix1+(window_size*i)+k) * (*(matrix2+(window_size*k)+j));
+            }
+            *(result+(window_size*i)+j) = sum;
+            sum = 0;
+        }
 }
 
 __device__ float localVariance(uint8_t* array, uint32_t length, float mean){
@@ -270,7 +286,70 @@ __global__ void FrostFilter(uint8_t* image, uint32_t* width, uint16_t* window_si
     free(filtblock);
 }
 
+__global__ void DCT_Filter(uint8_t* image, uint32_t* width, uint16_t* window_size, uint16_t* bl_width, float* DCT_Creator, float* DCT_Creator_T, float* SD){
 
+    unsigned int x_delay = (blockIdx.x) * (*bl_width);
+    unsigned int y_delay = (blockIdx.y) * (*bl_width);
+    unsigned int x_max = x_delay + *bl_width - *window_size;
+    unsigned int y_max = y_delay + *bl_width - *window_size;
+
+    float threshold = 2.7 * *SD;
+
+    uint32_t *result_image = (uint32_t*)malloc(sizeof(uint32_t)* *bl_width * *bl_width);
+    uint8_t *num_counter =  (uint8_t*)malloc(sizeof(uint8_t)* *bl_width * *bl_width);
+    for(int i = 0; i < pow(*bl_width, 2); i++) {
+        result_image[i] = 0;
+        num_counter[i] = 0;
+    }
+
+    float *block = new float[*window_size * *window_size];
+    float *temp = new float[*window_size * *window_size];
+
+    for(int i = y_delay, i_r = 0; i <= y_max; i++, i_r++){
+        for (int j = x_delay, j_r = 0; j <= x_max; j++, j_r++) {
+            //printf("%i %i\n", i, j);
+            //printf(" %i \n", *window_size);
+            for(int z = 0; z < *window_size; z++){
+                for(int l = 0; l < *window_size; l++){
+                    block[(z* *window_size) + l] = (float)image[((i+z) * *width) + (j + l)];
+                    //printf("%.1f ", block[(z* *window_size) + l]);
+                }
+                //printf("\n");
+            }
+
+            MultiplyMatrix(DCT_Creator, block, temp, *window_size);
+            MultiplyMatrix(temp, DCT_Creator_T, block, *window_size);
+
+            for(int z = 1; z < *window_size * *window_size; z++){
+                if(fabsf(block[z]) <= threshold){
+                    block[z] = 0;
+                }
+            }
+
+            MultiplyMatrix(block, DCT_Creator, temp, *window_size);
+            MultiplyMatrix(DCT_Creator_T, temp, block, *window_size);
+
+            for(int z = 0; z < *window_size; z++){
+                for(int l = 0; l < *window_size; l++){
+                    result_image[((i_r+z) * *bl_width) + (j_r+l)] += (uint8_t) block[(z * *window_size) + l];
+                    num_counter[((i_r+z) * *bl_width) + (j_r+l)] += 1;
+                }
+            }
+        }
+    }
+
+    for(int i = y_delay, i_r = 0; i < y_max + *window_size; i++, i_r++) {
+        for (int j = x_delay, j_r = 0; j < x_max + *window_size; j++, j_r++){
+            uint8_t t = (uint8_t) (result_image[(i_r * *bl_width) + j_r] / (num_counter[(i_r * *bl_width) + j_r] != 0 ? num_counter[(i_r * *bl_width) + j_r] : 1));
+            image[(i * *width) + j] = t;
+        }
+    }
+    free(result_image);
+    free(num_counter);
+    free(block);
+    free(temp);
+
+}
 
 __host__ float* S_creator(uint16_t block_size){
     float* S = new float[block_size*block_size];
@@ -291,7 +370,7 @@ __host__ float* S_creator(uint16_t block_size){
 
 void CudaFilter(Image* image_, unsigned short block_size, float SD, const std::string filterName){
 
-    unsigned short block_size_in_kernel = image_->width/20;
+    unsigned short block_size_in_kernel = image_->width/16;
     uint8_t* image_dev;
     unsigned int* width_dev;
     unsigned int* height_dev;
@@ -329,9 +408,36 @@ void CudaFilter(Image* image_, unsigned short block_size, float SD, const std::s
         cudaMemcpy(S_block_dev, S_block, sizeof(float) * block_size * block_size, cudaMemcpyHostToDevice);
     }
 
-    if(filterName == "Median") MedianFilter<<<dim3(20, 20), 1>>>(image_dev, width_dev, wind_size_dev, block_size_dev);
-    else if(filterName == "Li") LiFilter<<<dim3(20, 20), 1>>>(image_dev, width_dev, wind_size_dev, block_size_dev, noiseSD);
-    else if(filterName == "Frost") FrostFilter<<<dim3(20, 20), 1>>>(image_dev, width_dev, wind_size_dev, block_size_dev, S_block_dev);
+
+    if(filterName == "Median") MedianFilter<<<dim3(16, 16), 1>>>(image_dev, width_dev, wind_size_dev, block_size_dev);
+    else if(filterName == "Li") LiFilter<<<dim3(16, 16), 1>>>(image_dev, width_dev, wind_size_dev, block_size_dev, noiseSD);
+    else if(filterName == "Frost") FrostFilter<<<dim3(16, 16), 1>>>(image_dev, width_dev, wind_size_dev, block_size_dev, S_block_dev);
+    else if(filterName == "DCT"){
+        float* DCT_creator;
+        float* DCT_creator_T;
+
+        cudaMalloc((void**) &DCT_creator, sizeof(float)*block_size*block_size);
+        cudaMalloc((void**) &DCT_creator_T, sizeof(float)*block_size*block_size);
+
+        if(block_size == 2){
+            cudaMemcpy(DCT_creator, &DCT_Creator2[0][0], sizeof(float)*block_size*block_size, cudaMemcpyHostToDevice);
+            cudaMemcpy(DCT_creator_T, &DCT_Creator2_T[0][0], sizeof(float)*block_size*block_size, cudaMemcpyHostToDevice);
+        } else if(block_size == 4){
+            cudaMemcpy(DCT_creator, &DCT_Creator4[0][0], sizeof(float)*block_size*block_size, cudaMemcpyHostToDevice);
+            cudaMemcpy(DCT_creator_T, &DCT_Creator4_T[0][0], sizeof(float)*block_size*block_size, cudaMemcpyHostToDevice);
+        } else if(block_size == 8){
+            cudaMemcpy(DCT_creator, &DCT_Creator8[0][0], sizeof(float)*block_size*block_size, cudaMemcpyHostToDevice);
+            cudaMemcpy(DCT_creator_T, &DCT_Creator8_T[0][0], sizeof(float)*block_size*block_size, cudaMemcpyHostToDevice);
+        } else if(block_size == 16){
+            cudaMemcpy(DCT_creator, &DCT_Creator16[0][0], sizeof(float)*block_size*block_size, cudaMemcpyHostToDevice);
+            cudaMemcpy(DCT_creator_T, &DCT_Creator16_T[0][0], sizeof(float)*block_size*block_size, cudaMemcpyHostToDevice);
+        } else if(block_size == 32){
+            cudaMemcpy(DCT_creator, &DCT_Creator32[0][0], sizeof(float)*block_size*block_size, cudaMemcpyHostToDevice);
+            cudaMemcpy(DCT_creator_T, &DCT_Creator32_T[0][0], sizeof(float)*block_size*block_size, cudaMemcpyHostToDevice);
+        }
+        DCT_Filter<<<dim3(16, 16), 1>>>(image_dev, width_dev, wind_size_dev, block_size_dev, DCT_creator, DCT_creator_T, noiseSD);
+    }
+
     else printf("Filter not found\n");
 
     unsigned int finish_time_kernel = clock();
