@@ -137,98 +137,65 @@ __device__ void padarray(const uint8_t* block, const uint32_t width_block, const
 }
 
 __global__ void MedianFilter(uint8_t* image, unsigned int* width, unsigned short* window_size, const unsigned short* bl_width){
-    unsigned int x_delay = (blockIdx.x) * (*bl_width);
-    unsigned int y_delay = (blockIdx.y) * (*bl_width);
-    unsigned int x_max = x_delay + *bl_width;
-    unsigned int y_max = y_delay + *bl_width;
+    unsigned int y_delay = blockIdx.x * *bl_width;
 
+    uint8_t *block = new uint8_t[*window_size * *window_size];
 
-    unsigned int bl_pad = int(*window_size / 2);
-    unsigned int size_block = *bl_width + bl_pad * 2;
-
-    auto *block = new uint8_t[*bl_width * *bl_width];
-    auto *padblock = new uint8_t[size_block * size_block];
-    auto *filtblock = new uint8_t[*window_size * *window_size];
-
-
-    for(uint32_t i = y_delay, i_b = 0; i < y_max; i++, i_b++){
-        for(uint32_t j = x_delay, j_b = 0; j < x_max; j++, j_b++){
-            block[(i_b * *bl_width) + j_b] = image[(i * *width) + j];
-            //printf("%i %i -> %i \n", i, j, image[(i * *width) + j]);
-        }
-    }
-
-    padarray(block, *bl_width, bl_pad, size_block, padblock);
-
-    free(block);
     uint8_t med = 0;
 
-    for(uint32_t i = bl_pad, i_im = y_delay; i < size_block - bl_pad; i++, i_im++){
-        for(uint32_t j = bl_pad, j_im = x_delay; j < size_block - bl_pad; j++, j_im++){
-            for(uint32_t y = 0, y_im = i - bl_pad; y < *window_size; y++, y_im++){
-                for(uint32_t x = 0, x_im = j - bl_pad; x < *window_size; x++, x_im++){
-                    filtblock[(x * *window_size) + y] = padblock[(y_im * size_block) + x_im];
+    uint16_t border = *window_size / 2;
+
+    for(uint32_t i = border, i_im = y_delay + border; i < *bl_width - border; i++, i_im++){
+        for(uint32_t j = border; j < *bl_width - border; j++){
+            //printf("%i %i\n", i_im, j);
+            for(uint32_t y = 0, y_im = i_im - border; y < *window_size; y++, y_im++){
+                for(uint32_t x = 0, x_im = j - border; x < *window_size; x++, x_im++){
+                    block[(x * *window_size) + y] = image[(y_im * *bl_width) + x_im];
                     //printf("%i ", filtblock[(x * *window_size) + y]);
                 }
                 //printf("\n");
             }
-            med = median(filtblock, *window_size * *window_size);
+            med = median(block, *window_size * *window_size);
             //printf("%i \n\n", med);
-            image[(i_im * *width) + j_im] = med;
+            image[(i_im * *width) + j] = med;
         }
     }
 
-    free(padblock);
-    free(filtblock);
+    free(block);
 }
 
 __global__ void LiFilter(uint8_t* image, uint32_t* width, uint16_t* window_size, uint16_t* bl_width, float* SD){
-    unsigned int x_delay = (blockIdx.x) * (*bl_width);
-    unsigned int y_delay = (blockIdx.y) * (*bl_width);
-    unsigned int x_max = x_delay + *bl_width;
-    unsigned int y_max = y_delay + *bl_width;
+    unsigned int y_delay = blockIdx.x * *bl_width;
 
+    uint8_t *block = new uint8_t[*window_size * *window_size];
 
-    unsigned int bl_pad = int(*window_size / 2);
-    unsigned int size_block = *bl_width + bl_pad * 2;
+    uint8_t med = 0;
 
-    auto *block = new uint8_t[*bl_width * *bl_width];
-    auto *padblock = new uint8_t[size_block * size_block];
-    auto *filtblock = new uint8_t[*window_size * *window_size];
+    uint16_t border = *window_size / 2;
 
-
-    for(uint32_t i = y_delay, i_b = 0; i < y_max; i++, i_b++){
-        for(uint32_t j = x_delay, j_b = 0; j < x_max; j++, j_b++){
-            block[(i_b * *bl_width) + j_b] = image[(i * *width) + j];
-            //printf("%i %i -> %i \n", i, j, image[(i * *width) + j]);
-        }
-    }
-
-    padarray(block, *bl_width, bl_pad, size_block, padblock);
-
-    free(block);
     float LV = 0; // Local variance variable
     float LM = 0; // Local mean
     uint8_t K = 0;
-    for(uint32_t i = bl_pad, i_im = y_delay; i < size_block - bl_pad; i++, i_im++){
-        for(uint32_t j = bl_pad, j_im = x_delay; j < size_block - bl_pad; j++, j_im++){
-            for(uint32_t y = 0, y_im = i - bl_pad; y < *window_size; y++, y_im++){
-                for(uint32_t x = 0, x_im = j - bl_pad; x < *window_size; x++, x_im++){
-                    filtblock[(x * *window_size) + y] = padblock[(y_im * size_block) + x_im];
+
+    for(uint32_t i = border, i_im = y_delay + border; i < *bl_width - border; i++, i_im++){
+        for(uint32_t j = border; j < *bl_width - border; j++){
+            //printf("%i %i\n", i_im, j);
+            for(uint32_t y = 0, y_im = i_im - border; y < *window_size; y++, y_im++){
+                for(uint32_t x = 0, x_im = j - border; x < *window_size; x++, x_im++){
+                    block[(x * *window_size) + y] = image[(y_im * *bl_width) + x_im];
                     //printf("%i ", filtblock[(x * *window_size) + y]);
                 }
                 //printf("\n");
             }
-            LM = localMean(filtblock, *window_size * *window_size);
-            LV = localVariance(filtblock, *window_size * *window_size, LM);
+            LM = localMean(block, *window_size * *window_size);
+            LV = localVariance(block, *window_size * *window_size, LM);
             K = LV/(LV + *SD);
             //printf("%i \n\n", med);
-            image[(i_im * *width) + j_im] = LM + (K * (image[(i_im * *width) + j_im] - LM));
+            image[(i_im * *width) + j] = LM + (K * (image[(i_im * *width) + j] - LM));;
         }
     }
 
-    free(padblock);
-    free(filtblock);
+    free(block);
 }
 
 __global__ void FrostFilter(uint8_t* image, uint32_t* width, uint16_t* window_size, uint16_t* bl_width, float* S){
@@ -368,9 +335,9 @@ __host__ float* S_creator(uint16_t block_size){
     return nullptr;
 }
 
-void CudaFilter(Image* image_, unsigned short block_size, float SD, const std::string filterName){
+void CudaFilter(Image* image_, unsigned short block_size, float SD, uint16_t im_bl_size, const std::string filterName){
 
-    unsigned short block_size_in_kernel = image_->width/16;
+    unsigned short block_size_in_kernel = im_bl_size;
     uint8_t* image_dev;
     unsigned int* width_dev;
     unsigned int* height_dev;
@@ -409,8 +376,8 @@ void CudaFilter(Image* image_, unsigned short block_size, float SD, const std::s
     }
 
 
-    if(filterName == "Median") MedianFilter<<<dim3(16, 16), 1>>>(image_dev, width_dev, wind_size_dev, block_size_dev);
-    else if(filterName == "Li") LiFilter<<<dim3(16, 16), 1>>>(image_dev, width_dev, wind_size_dev, block_size_dev, noiseSD);
+    if(filterName == "Median") MedianFilter<<<16*16, 1>>>(image_dev, width_dev, wind_size_dev, block_size_dev);
+    else if(filterName == "Li") LiFilter<<<16*16, 1>>>(image_dev, width_dev, wind_size_dev, block_size_dev, noiseSD);
     else if(filterName == "Frost") FrostFilter<<<dim3(16, 16), 1>>>(image_dev, width_dev, wind_size_dev, block_size_dev, S_block_dev);
     else if(filterName == "DCT"){
         float* DCT_creator;

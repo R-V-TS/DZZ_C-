@@ -116,6 +116,8 @@ int main() {
 
     GDALRasterBand *band = poDataset->GetRasterBand(1);
 
+    uint32_t num_of_block = 16*16;
+
     int nXSize = band->GetXSize();
     int nYsize = band->GetYSize();
 
@@ -131,38 +133,43 @@ int main() {
     uint8_t* norm_im = normalizationIm(data, (image_width + (block_pad * 2))*(image_height + (block_pad * 2)));
     //displayImage(norm_im, image_width + (block_pad * 2), image_height + (block_pad * 2));
 
-    uint8_t * im_stack = Image2Stack(norm_im, image_width, image_height, block_pad, 32);
-
-    free(norm_im);
-
 
     Image ideal_image{};
-    ideal_image.data = new uint8_t[(image_width + 2 * (block_pad)) * (image_height + 2 * (block_pad))];
-    memcpy(ideal_image.data, im_stack, sizeof(uint8_t) * (image_width + 2 * (block_pad)) * (image_height + 2 * (block_pad)));
-    ideal_image.width = image_width + 2*block_pad;
-    ideal_image.height = image_height + 2*block_pad;
+    ideal_image.data = new uint8_t[(image_width + (block_pad * 2))*(image_height + (block_pad * 2))];
+    memcpy(ideal_image.data, norm_im, sizeof(uint8_t) * (image_width + (block_pad * 2))*(image_height + (block_pad * 2)));
+    ideal_image.width = image_width;
+    ideal_image.height = image_height;
 
     Image noise_image{};
-    noise_image.data = new uint8_t[(image_width + 2 * (block_pad)) * (image_height + 2 * (block_pad))];
-    noise_image.width = image_width;
-    noise_image.height = image_height;
+    noise_image.data = new uint8_t[42 * (num_of_block * (42))];
+    noise_image.width = 42;
+    noise_image.height = (num_of_block * (42));
+
+    Image stack_ideal{};
+    noise_image.data = new uint8_t[42 * (num_of_block * (42))];
+    noise_image.width = 42;
+    noise_image.height = (num_of_block * (42));
 
     Image image{};
-    image.data = new uint8_t[(image_width + 2 * (block_pad)) * (image_height + 2 * (block_pad))];
+    image.data;
     image.width = image_width;
     image.height = image_height;
 
-    memcpy(ideal_image.data, im_stack, sizeof(uint8_t) * (image_width + 2 * (block_pad)) * (image_height + 2 * (block_pad)));
+    memcpy(ideal_image.data, norm_im, sizeof(uint8_t) * (image_width + (block_pad * 2))*(image_height + (block_pad * 2)));
 
     printf("Add noise\n");
-    AWGN(&noise_image, 15, 0);
-    memcpy(image.data, noise_image.data, sizeof(uint8_t) * image_width * image_height); // Copy image
+    AWGN(&ideal_image, 15, 0);
+
+    stack_ideal.data = Image2Stack(ideal_image.data, image_width, image_height, block_pad, 32);
+    memcpy(noise_image.data, stack_ideal.data, sizeof(uint8_t) * 42 * (num_of_block * (42)));
+
+    CudaFilter(&noise_image, 7, 15, 42, "Li");
 
    // saveImage(image.data, image_width, image_height, "noised_image_" + std::to_string(15) + "_" + imname + "_" + +".png");
 
-    auto* image = stack2Image(im_stack, image_width, image_height, block_pad, 32);
+    image.data = stack2Image(noise_image.data, image_width, image_height, block_pad, 32);
 
-    displayImage(image, image_width, image_height);
+    displayImage(image.data, (image_width), (image_height));
 
     auto mse = MSE(&image, &ideal_image);
     auto psnr = PSNR(&ideal_image, &image);

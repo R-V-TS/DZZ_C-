@@ -11,6 +11,6 @@
 
 
 
-void CudaFilter(Image* image_, unsigned short block_size, float SD, const std::string filterName);
+void CudaFilter(Image *image_, unsigned short block_size, float SD, uint16_t im_bl_size, const std::string filterName);
 
 #endif //CUDA_DZZ_SIMPLYFILTERS_H
