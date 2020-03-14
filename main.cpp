@@ -41,9 +41,10 @@ void saveImage(T* image, int width, int height, std::string im_name){
     cv::imwrite(im_name, im);
 }
 
-void save2file(std::fstream *stream, std::string filtName, float STD, float MSE, float PSNR, float PSNRHVS, float PSNRHVSM, float time){
-    *stream << filtName << "," << std::to_string(STD) << "," << std::to_string(MSE) << "," << std::to_string(PSNR) << "," << std::to_string(PSNRHVS) << "," << std::to_string(PSNRHVSM) << "," << std::to_string(time) << std::endl;
+void save2file(std::fstream *stream, std::string filtName, float STD, int window_size, float MSE, float PSNR, float PSNRHVS, float PSNRHVSM, float time){
+    *stream << filtName << "," << std::to_string(STD) << "," << std::to_string(window_size) << "," << std::to_string(MSE) << "," << std::to_string(PSNR) << "," << std::to_string(PSNRHVS) << "," << std::to_string(PSNRHVSM) << "," << std::to_string(time) << std::endl;
 }
+
 
 int main() {
 
@@ -62,6 +63,8 @@ int main() {
 
     int image_width = 512;
     int image_height = 512;
+    int pad_size = 5;
+    int im_with_pad = image_width + pad_size*2;
 
     GDALRasterBand *band = poDataset->GetRasterBand(1);
 
@@ -71,26 +74,43 @@ int main() {
     //Type
     printf("DType = %i\n Size = %i, %i\n", band->GetRasterDataType(), nXSize, nYsize);
 
-    auto* data = (uint16_t *) CPLMalloc(sizeof(uint16_t)*image_width*image_height);
+    auto* data = (uint16_t *) CPLMalloc(sizeof(uint16_t)*im_with_pad*im_with_pad);
 
-    band->RasterIO( GF_Read, 512, 512, image_width, image_height,
-                    data, image_width, image_height, band->GetRasterDataType(),
+    band->RasterIO( GF_Read, 512-pad_size, 512-pad_size, im_with_pad, im_with_pad,
+                    data, im_with_pad, im_with_pad, band->GetRasterDataType(),
                     0, 0 );
 
-    auto* norm_im = normalizationIm(data, image_height*image_width);
+    auto* norm_im = normalizationIm(data, im_with_pad*im_with_pad);
 
-    saveImage(norm_im, image_width, image_height, "start_image"+imname+".png");
+    //saveImage(norm_im, image_width, image_height, "start_image"+imname+".png");
 
     Image ideal_image{};
-    ideal_image.data = new uint8_t[image_width * image_height];
-    memcpy(ideal_image.data, norm_im, sizeof(uint8_t) * image_width * image_height);
-    ideal_image.width = image_width;
-    ideal_image.height = image_height;
+    ideal_image.data = new uint8_t[im_with_pad*im_with_pad];
+    memcpy(ideal_image.data, norm_im, sizeof(uint8_t) * im_with_pad * im_with_pad);
+    ideal_image.width = im_with_pad;
+    ideal_image.height = im_with_pad;
 
     Image noise_image{};
-    noise_image.data = new uint8_t[image_width * image_height];
-    noise_image.width = image_width;
-    noise_image.height = image_height;
+    noise_image.data = new uint8_t[im_with_pad*im_with_pad];
+    noise_image.width = im_with_pad;
+    noise_image.height = im_with_pad;
+
+    Image filter_image{};
+    filter_image.data = new uint8_t[im_with_pad*im_with_pad];
+    filter_image.width = im_with_pad;
+    filter_image.height = im_with_pad;
+
+
+    Image ideal_without_pad{};
+    ideal_without_pad.data = new uint8_t[image_height*image_width];
+    for(int i = 0; i < image_width; i++){
+        for(int j = 0; j < image_height; j++){
+            ideal_without_pad.data[(i * image_width) + j] = ideal_image.data[((i + pad_size) * im_with_pad) + (j + pad_size)];
+        }
+    }
+
+    ideal_without_pad.width = image_width;
+    ideal_without_pad.height = image_height;
 
     Image image{};
     image.data = new uint8_t[image_width * image_height];
@@ -100,80 +120,118 @@ int main() {
     std::fstream outFile;
     outFile.open(filename_metric, std::ios::out);
 
-    outFile << "Filter_name" << "," << "Noise STD" << "," << "MSE" << "," << "PSNR" << "," << "PSNRHVS" << "," << "PSNRHVSM" << "," << "Execute time" << std::endl;
+    outFile << "Filter_name" << "," << "Noise STD" << "," << "Window size" << "," << "MSE" << "," << "PSNR" << "," << "PSNRHVS" << "," << "PSNRHVSM" << "," << "Execute time" << std::endl;
 
     float noise_variance[5] = {5, 10, 15, 20, 25};
+    int window_sizes[4] = {3,5,7,9};
 
     for(auto i : noise_variance) {
         printf("STD = %f\n", i);
-        memcpy(noise_image.data, ideal_image.data, sizeof(uint8_t) * image_width * image_height);
+        memcpy(noise_image.data, ideal_image.data, sizeof(uint8_t) * im_with_pad * im_with_pad);
 
         printf("Add noise\n");
         AWGN(&noise_image, i, 0);
-        memcpy(image.data, noise_image.data, sizeof(uint8_t) * image_width * image_height); // Copy image
 
-        saveImage(image.data, image_width, image_height, "noised_image_" + std::to_string(i) + "_" + imname + "_" + +".png");
-
-        auto mse = MSE(&image, &ideal_image);
-        auto psnr = PSNR(&ideal_image, &image);
-        auto *psnrhvs = PSNRHVSM(&image, &ideal_image);
+        auto mse = MSE(&image, &ideal_without_pad);
+        auto psnr = PSNR(&ideal_image, &ideal_without_pad);
+        auto *psnrhvs = PSNRHVSM(&image, &ideal_without_pad);
         printf("MSE = %f\nPSNR = %f\nPSNRHVS = %f\nPSNRHVSM = %f\n", mse, psnr, psnrhvs[0], psnrhvs[1]);
-
-        save2file(&outFile, "None", i, mse, psnr, psnrhvs[0], psnrhvs[1], 0);
-
 
         printf("Denoising \n");
 
         //Apply Median filter
-        start = clock();
-        MedFilter(image.data, image.width, image.height, 7);
-        finish = clock();
-        mse = MSE(&image, &ideal_image);
-        psnr = PSNR(&ideal_image, &image);
-        psnrhvs = PSNRHVSM(&image, &ideal_image);
-        printf("MSE = %f\nPSNR = %f\nPSNRHVS = %f\nPSNRHVSM = %f\n", mse, psnr, psnrhvs[0], psnrhvs[1]);
-        save2file(&outFile, "Median", i, mse, psnr, psnrhvs[0], psnrhvs[1], (float(finish-start)/CLOCKS_PER_SEC));
-        saveImage(image.data, image_width, image_height, "Median_filter_" + std::to_string(i) + "_" + imname + ".png" );
+        for(auto wind_s: window_sizes) {
+            memcpy(filter_image.data, noise_image.data, sizeof(uint8_t) * im_with_pad * im_with_pad);
+            start = clock();
+            MedFilter(filter_image.data, im_with_pad, im_with_pad, wind_s);
+            finish = clock();
 
-        memcpy(image.data, noise_image.data, sizeof(uint8_t) * image_width * image_height); // Copy image
+            //Delete paddings
+            for(int i = 0; i < image_width; i++){
+                for(int j = 0; j < image_height; j++){
+                    image.data[(i * image_width) + j] = filter_image.data[((i + pad_size) * im_with_pad) + (j + pad_size)];
+                }
+            }
 
+            auto mse = MSE(&image, &ideal_without_pad);
+            auto psnr = PSNR(&ideal_image, &ideal_without_pad);
+            auto *psnrhvs = PSNRHVSM(&image, &ideal_without_pad);
+            printf("MSE = %f\nPSNR = %f\nPSNRHVS = %f\nPSNRHVSM = %f\n", mse, psnr, psnrhvs[0], psnrhvs[1]);
+            save2file(&outFile, "Median", i, wind_s, mse, psnr, psnrhvs[0], psnrhvs[1],
+                      (float(finish - start) / CLOCKS_PER_SEC));
+            saveImage(image.data, image_width, image_height,
+                      "Median_filter_" + std::to_string(wind_s) + "_" + std::to_string(i) + "_" + imname + ".png");
+        }
 
         //Apply Li filter
-        start = clock();
-        LiFilter(image.data, image.width, image.height, 7, i);
-        finish = clock();
-        mse = MSE(&image, &ideal_image);
-        psnr = PSNR(&ideal_image, &image);
-        psnrhvs = PSNRHVSM(&image, &ideal_image);
-        printf("MSE = %f\nPSNR = %f\nPSNRHVS = %f\nPSNRHVSM = %f\n", mse, psnr, psnrhvs[0], psnrhvs[1]);
-        save2file(&outFile, "Li", i, mse, psnr, psnrhvs[0], psnrhvs[1], (float(finish-start)/CLOCKS_PER_SEC));
-        saveImage(image.data, image_width, image_height, "Li_filter_" + std::to_string(i) + "_" + imname + ".png" );
-        memcpy(image.data, noise_image.data, sizeof(uint8_t) * image_width * image_height); // Copy image
+        for(auto wind_s: window_sizes) {
+            memcpy(filter_image.data, noise_image.data, sizeof(uint8_t) * im_with_pad * im_with_pad);
+            start = clock();
+            LiFilter(filter_image.data, im_with_pad, im_with_pad, wind_s, i);
+            finish = clock();
+
+            //Delete paddings
+            for(int i = 0; i < image_width; i++){
+                for(int j = 0; j < image_height; j++){
+                    image.data[(i * image_width) + j] = filter_image.data[((i + pad_size) * im_with_pad) + (j + pad_size)];
+                }
+            }
+
+            auto mse = MSE(&image, &ideal_without_pad);
+            auto psnr = PSNR(&ideal_image, &ideal_without_pad);
+            auto *psnrhvs = PSNRHVSM(&image, &ideal_without_pad);
+            printf("MSE = %f\nPSNR = %f\nPSNRHVS = %f\nPSNRHVSM = %f\n", mse, psnr, psnrhvs[0], psnrhvs[1]);
+            save2file(&outFile, "Li", i, wind_s, mse, psnr, psnrhvs[0], psnrhvs[1],
+                      (float(finish - start) / CLOCKS_PER_SEC));
+            saveImage(image.data, image_width, image_height,
+                      "Li_filter_" + std::to_string(wind_s) + "_" + std::to_string(i) + "_" + imname + ".png");
+        }
 
         //Apply Frost filter
-        start = clock();
-        FrostFilter(image.data, image.width, image.height);
-        finish = clock();
-        mse = MSE(&image, &ideal_image);
-        psnr = PSNR(&ideal_image, &image);
-        psnrhvs = PSNRHVSM(&image, &ideal_image);
-        printf("MSE = %f\nPSNR = %f\nPSNRHVS = %f\nPSNRHVSM = %f\n", mse, psnr, psnrhvs[0], psnrhvs[1]);
-        save2file(&outFile, "Frost", i, mse, psnr, psnrhvs[0], psnrhvs[1], (float(finish-start)/CLOCKS_PER_SEC));
-        saveImage(image.data, image_width, image_height, "Frost_filter_" + std::to_string(i) + "_" + imname + ".png" );
+        for(auto wind_s: window_sizes) {
+            memcpy(filter_image.data, noise_image.data, sizeof(uint8_t) * im_with_pad * im_with_pad);
+            start = clock();
+            FrostFilter(filter_image.data, im_with_pad, im_with_pad, wind_s);
+            finish = clock();
 
-        memcpy(image.data, noise_image.data, sizeof(uint8_t) * image_width * image_height); // Copy image
+            //Delete paddings
+            for(int i = 0; i < image_width; i++){
+                for(int j = 0; j < image_height; j++){
+                    image.data[(i * image_width) + j] = filter_image.data[((i + pad_size) * im_with_pad) + (j + pad_size)];
+                }
+            }
+
+            auto mse = MSE(&image, &ideal_without_pad);
+            auto psnr = PSNR(&ideal_image, &ideal_without_pad);
+            auto *psnrhvs = PSNRHVSM(&image, &ideal_without_pad);
+            printf("MSE = %f\nPSNR = %f\nPSNRHVS = %f\nPSNRHVSM = %f\n", mse, psnr, psnrhvs[0], psnrhvs[1]);
+            save2file(&outFile, "Frost", i, wind_s, mse, psnr, psnrhvs[0], psnrhvs[1],
+                      (float(finish - start) / CLOCKS_PER_SEC));
+            saveImage(image.data, image_width, image_height,
+                      "Frost_filter_" + std::to_string(wind_s) + "_" + std::to_string(i) + "_" + imname + ".png");
+        }
 
         //Apply DCTBased filter
+        memcpy(filter_image.data, noise_image.data, sizeof(uint8_t) * im_with_pad * im_with_pad);
         start = clock();
-        DCTBasedFilter(&image, i, 8);
+        DCTBasedFilter(&filter_image, i, 8);
         finish = clock();
-        mse = MSE(&image, &ideal_image);
-        psnr = PSNR(&ideal_image, &image);
-        psnrhvs = PSNRHVSM(&image, &ideal_image);
-        printf("MSE = %f\nPSNR = %f\nPSNRHVS = %f\nPSNRHVSM = %f\n", mse, psnr, psnrhvs[0], psnrhvs[1]);
-        save2file(&outFile, "DCTbased", i, mse, psnr, psnrhvs[0], psnrhvs[1], (float(finish-start)/CLOCKS_PER_SEC));
 
-        saveImage(image.data, image_width, image_height, "DCTBased_filter_" + std::to_string(i) + "_" + imname + ".png" );
+        //Delete paddings
+        for(int i = 0; i < image_width; i++){
+            for(int j = 0; j < image_height; j++){
+                image.data[(i * image_width) + j] = filter_image.data[((i + pad_size) * im_with_pad) + (j + pad_size)];
+            }
+        }
+
+        mse = MSE(&image, &ideal_without_pad);
+        psnr = PSNR(&ideal_image, &ideal_without_pad);
+        psnrhvs = PSNRHVSM(&image, &ideal_without_pad);
+        printf("MSE = %f\nPSNR = %f\nPSNRHVS = %f\nPSNRHVSM = %f\n", mse, psnr, psnrhvs[0], psnrhvs[1]);
+        save2file(&outFile, "Frost", i, 8, mse, psnr, psnrhvs[0], psnrhvs[1],
+                  (float(finish - start) / CLOCKS_PER_SEC));
+        saveImage(image.data, image_width, image_height,
+                  "Frost_filter_" + std::to_string(8) + "_" + std::to_string(i) + "_" + imname + ".png");
     }
 
     outFile.close();
@@ -182,5 +240,6 @@ int main() {
     free(ideal_image.data);
     free(image.data);
     free(noise_image.data);
+    free(ideal_without_pad.data);
     return 0;
 }

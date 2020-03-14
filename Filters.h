@@ -90,14 +90,40 @@ void LiFilter(T* image, int width, int height, int block_size, float SD){
     free(block);
 }
 
+
+float* S_creator(uint16_t block_size){
+    float* S = new float[block_size*block_size];
+
+    float point_val = 0;
+
+    for(int i = block_size/2, i_counter = 0; i >= 0; i--, i_counter++){
+        for(int j = block_size/2, j_counter = 0; j >= 0; j--, j_counter++){
+            point_val = sqrt(j_counter + i_counter);
+            S[(i * block_size) + j] = point_val;
+            S[(block_size - i - 1) * block_size + j] = point_val;
+            S[(i * block_size) + (block_size - j - 1)] = point_val;
+            S[((block_size - i - 1) * block_size) + (block_size - j - 1)] = point_val;
+        }
+    }
+
+    /*for(int i = 0; i < block_size; i++){
+        for(int j = 0; j < block_size; j++){
+            printf("%f ", S[(i * block_size) + j]);
+        }
+        printf("\n");
+    }*/
+
+    return S;
+}
+
 template <typename T>
-void FrostFilter(T* image, int width, int height){
-    int block_size = 3;
+void FrostFilter(T* image, int width, int height, int wind_size){
+    int block_size = wind_size;
     float D = 1, B = 0;
     float Y_ch = 0, Y_zn = 0, W;
 
     auto* block = new T[block_size*block_size];
-    float S[9] = {1.4142, 1, 1.4142, 1, 0, 1, 1.4142, 1, 1.4142};
+    float* S = S_creator(wind_size);
     for(int i = block_size/2; i < height-(block_size/2); i++){
         for(int j = block_size/2; j < width-(block_size/2); j++){
             for(int k = i - (block_size/2), x = 0; k <= i + block_size/2; k++, x++){
