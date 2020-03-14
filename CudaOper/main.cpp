@@ -41,8 +41,8 @@ void saveImage(T* image, int width, int height, std::string im_name){
     cv::imwrite(im_name, im);
 }
 
-void save2file(std::fstream *stream, std::string filtName, float STD, float MSE, float PSNR, float PSNRHVS, float PSNRHVSM, float time){
-    *stream << filtName << "," << std::to_string(STD) << "," << std::to_string(MSE) << "," << std::to_string(PSNR) << "," << std::to_string(PSNRHVS) << "," << std::to_string(PSNRHVSM) << "," << std::to_string(time) << std::endl;
+void save2file(std::fstream *stream, std::string filtName, float STD, int window_size, float MSE, float PSNR, float PSNRHVS, float PSNRHVSM, float time){
+    *stream << filtName << "," << std::to_string(STD) << "," << std::to_string(window_size) << "," << std::to_string(MSE) << "," << std::to_string(PSNR) << "," << std::to_string(PSNRHVS) << "," << std::to_string(PSNRHVSM) << "," << std::to_string(time) << std::endl;
 }
 
 uint8_t* Image2Stack(uint8_t* image_pixel, uint32_t width, uint32_t height, uint32_t pad_width, uint32_t block_width){
@@ -155,114 +155,115 @@ int main() {
     image.width = image_width;
     image.height = image_height;
 
-    memcpy(ideal_image.data, norm_im, sizeof(uint8_t) * (image_width + (block_pad * 2))*(image_height + (block_pad * 2)));
+    Image image_metric{};
+    image_metric.data = new uint8_t[image_width * image_height];
+    for(int i = block_pad, i_im = 0; i < image_height + block_pad; i++, i_im++){
+        for(int j = block_pad, j_im = 0; j < image_width + block_pad; j++, j_im++){
+            image_metric.data[(i_im * image_width) + j_im] = norm_im[(i * (image_width + 2*block_pad)) + j];
+        }
+    }
+    image_metric.width = image_width;
+    image_metric.height = image_height;
 
-    printf("Add noise\n");
-    AWGN(&ideal_image, 15, 0);
-
-    stack_ideal.data = Image2Stack(ideal_image.data, image_width, image_height, block_pad, 32);
-    memcpy(noise_image.data, stack_ideal.data, sizeof(uint8_t) * 42 * (num_of_block * (42)));
-
-    CudaFilter(&noise_image, 7, 15, 42, "Li");
 
    // saveImage(image.data, image_width, image_height, "noised_image_" + std::to_string(15) + "_" + imname + "_" + +".png");
 
-    image.data = stack2Image(noise_image.data, image_width, image_height, block_pad, 32);
 
-    displayImage(image.data, (image_width), (image_height));
+    std::fstream outFile;
+    outFile.open(filename_metric, std::ios::out);
 
-    auto mse = MSE(&image, &ideal_image);
-    auto psnr = PSNR(&ideal_image, &image);
-    auto *psnrhvs = PSNRHVSM(&image, &ideal_image);
-    printf("MSE = %f\nPSNR = %f\nPSNRHVS = %f\nPSNRHVSM = %f\n", mse, psnr, psnrhvs[0], psnrhvs[1]);
+    outFile << "Filter_name" << "," << "Noise STD" << "," << "Window size" << "," << "MSE" << "," << "PSNR" << "," << "PSNRHVS" << "," << "PSNRHVSM" << "," << "Execute time" << std::endl;
 
-    //std::fstream outFile;
-    //outFile.open(filename_metric, std::ios::out);
-
-    //outFile << "Filter_name" << "," << "Noise STD" << "," << "MSE" << "," << "PSNR" << "," << "PSNRHVS" << "," << "PSNRHVSM" << "," << "Execute time" << std::endl;
-
-    /*float noise_variance[5] = {5, 10, 15, 20, 25};
+    float noise_variance[5] = {5, 10, 15, 20, 25};
+    int window_sizes[4] = {3,5,7,9};
 
     for(auto i : noise_variance) {
-        printf("STD = %f\n", i);
-        memcpy(noise_image.data, ideal_image.data, sizeof(uint8_t) * image_width * image_height);
+        float mse = 0;
+        float psnr = 0;
+        float *psnrhvs;
+        printf("STD = %f\n\n", i);
+        memcpy(ideal_image.data, norm_im, sizeof(uint8_t) * (image_width + (block_pad * 2))*(image_height + (block_pad * 2)));
 
         printf("Add noise\n");
-        AWGN(&noise_image, i, 0);
-        memcpy(image.data, noise_image.data, sizeof(uint8_t) * image_width * image_height); // Copy image
+        AWGN(&ideal_image, 15, 0);
 
-        saveImage(image.data, image_width, image_height, "noised_image_" + std::to_string(i) + "_" + imname + "_" + +".png");
-
-        auto mse = MSE(&image, &ideal_image);
-        auto psnr = PSNR(&ideal_image, &image);
-        auto *psnrhvs = PSNRHVSM(&image, &ideal_image);
-        printf("MSE = %f\nPSNR = %f\nPSNRHVS = %f\nPSNRHVSM = %f\n", mse, psnr, psnrhvs[0], psnrhvs[1]);
-
-        save2file(&outFile, "None", i, mse, psnr, psnrhvs[0], psnrhvs[1], 0);
-
+        stack_ideal.data = Image2Stack(ideal_image.data, image_width, image_height, block_pad, 32);
 
         printf("Denoising \n");
 
         //Apply Median filter
-        start = clock();
-        CudaFilter(&image, 7, i, "Median");
-        finish = clock();
-        mse = MSE(&image, &ideal_image);
-        psnr = PSNR(&ideal_image, &image);
-        psnrhvs = PSNRHVSM(&image, &ideal_image);
-        printf("MSE = %f\nPSNR = %f\nPSNRHVS = %f\nPSNRHVSM = %f\n", mse, psnr, psnrhvs[0], psnrhvs[1]);
-        save2file(&outFile, "Median", i, mse, psnr, psnrhvs[0], psnrhvs[1], (float(finish-start)/CLOCKS_PER_SEC));
-        saveImage(image.data, image_width, image_height, "Median_filter_" + std::to_string(i) + "_" + imname + ".png" );
-
-        memcpy(image.data, noise_image.data, sizeof(uint8_t) * image_width * image_height); // Copy image
-
+        for(auto wind_s: window_sizes) {
+            memcpy(noise_image.data, stack_ideal.data, sizeof(uint8_t) * 42 * (num_of_block * (42)));
+            start = clock();
+            CudaFilter(&noise_image, wind_s, i, 42, "Median");
+            finish = clock();
+            image.data = stack2Image(noise_image.data, image_width, image_height, block_pad, 32);
+            mse = MSE(&image, &image_metric);
+            psnr = PSNR(&ideal_image, &image_metric);
+            psnrhvs = PSNRHVSM(&image, &image_metric);
+            printf("MSE = %f\nPSNR = %f\nPSNRHVS = %f\nPSNRHVSM = %f\n", mse, psnr, psnrhvs[0], psnrhvs[1]);
+            save2file(&outFile, "Median", i, wind_s, mse, psnr, psnrhvs[0], psnrhvs[1],
+                      (float(finish - start) / CLOCKS_PER_SEC));
+            saveImage(image.data, image_width, image_height,
+                      "Median_filter_" + std::to_string(wind_s) + "_" + std::to_string(i) + "_" + imname + ".png");
+        }
 
         //Apply Li filter
-        start = clock();
-        CudaFilter(&image, 7, i, "Li");
-        finish = clock();
-        mse = MSE(&image, &ideal_image);
-        psnr = PSNR(&ideal_image, &image);
-        psnrhvs = PSNRHVSM(&image, &ideal_image);
-        printf("MSE = %f\nPSNR = %f\nPSNRHVS = %f\nPSNRHVSM = %f\n", mse, psnr, psnrhvs[0], psnrhvs[1]);
-        save2file(&outFile, "Li", i, mse, psnr, psnrhvs[0], psnrhvs[1], (float(finish-start)/CLOCKS_PER_SEC));
-        saveImage(image.data, image_width, image_height, "Li_filter_" + std::to_string(i) + "_" + imname + ".png" );
-        memcpy(image.data, noise_image.data, sizeof(uint8_t) * image_width * image_height); // Copy image
-
+        for(auto wind_s: window_sizes) {
+            memcpy(noise_image.data, stack_ideal.data, sizeof(uint8_t) * 42 * (num_of_block * (42)));
+            start = clock();
+            CudaFilter(&noise_image, wind_s, i, 42, "Li");
+            finish = clock();
+            image.data = stack2Image(noise_image.data, image_width, image_height, block_pad, 32);
+            mse = MSE(&image, &image_metric);
+            psnr = PSNR(&ideal_image, &image_metric);
+            psnrhvs = PSNRHVSM(&image, &image_metric);
+            printf("MSE = %f\nPSNR = %f\nPSNRHVS = %f\nPSNRHVSM = %f\n", mse, psnr, psnrhvs[0], psnrhvs[1]);
+            save2file(&outFile, "Li", i, wind_s, mse, psnr, psnrhvs[0], psnrhvs[1],
+                      (float(finish - start) / CLOCKS_PER_SEC));
+            saveImage(image.data, image_width, image_height,
+                      "Li_filter_" + std::to_string(wind_s) + "_" + std::to_string(i) + "_" + imname + ".png");
+        }
         //Apply Frost filter
-        start = clock();
-        CudaFilter(&image, 3, i, "Frost");
-        finish = clock();
-        mse = MSE(&image, &ideal_image);
-        psnr = PSNR(&ideal_image, &image);
-        psnrhvs = PSNRHVSM(&image, &ideal_image);
-        printf("MSE = %f\nPSNR = %f\nPSNRHVS = %f\nPSNRHVSM = %f\n", mse, psnr, psnrhvs[0], psnrhvs[1]);
-        save2file(&outFile, "Frost", i, mse, psnr, psnrhvs[0], psnrhvs[1], (float(finish-start)/CLOCKS_PER_SEC));
-        saveImage(image.data, image_width, image_height, "Frost_filter_" + std::to_string(i) + "_" + imname + ".png" );
-
-        memcpy(image.data, noise_image.data, sizeof(uint8_t) * image_width * image_height); // Copy image
+        for(auto wind_s: window_sizes) {
+            memcpy(noise_image.data, stack_ideal.data, sizeof(uint8_t) * 42 * (num_of_block * (42)));
+            start = clock();
+            CudaFilter(&noise_image, wind_s, i, 42, "Frost");
+            finish = clock();
+            image.data = stack2Image(noise_image.data, image_width, image_height, block_pad, 32);
+            mse = MSE(&image, &image_metric);
+            psnr = PSNR(&ideal_image, &image_metric);
+            psnrhvs = PSNRHVSM(&image, &image_metric);
+            printf("MSE = %f\nPSNR = %f\nPSNRHVS = %f\nPSNRHVSM = %f\n", mse, psnr, psnrhvs[0], psnrhvs[1]);
+            save2file(&outFile, "Frost", i, wind_s, mse, psnr, psnrhvs[0], psnrhvs[1],
+                      (float(finish - start) / CLOCKS_PER_SEC));
+            saveImage(image.data, image_width, image_height,
+                      "Frost_filter_" + std::to_string(wind_s) + "_" + std::to_string(i) + "_" + imname + ".png");
+        }
 
         //Apply DCTBased filter
+        memcpy(noise_image.data, stack_ideal.data, sizeof(uint8_t) * 42 * (num_of_block * (42)));
         start = clock();
-        CudaFilter(&image, 8, i, "DCT");
+        CudaFilter(&noise_image, 8, i, 42, "DCT");
         finish = clock();
-        mse = MSE(&image, &ideal_image);
-        psnr = PSNR(&ideal_image, &image);
-        psnrhvs = PSNRHVSM(&image, &ideal_image);
+        image.data = stack2Image(noise_image.data, image_width, image_height, block_pad, 32);
+        mse = MSE(&image, &image_metric);
+        psnr = PSNR(&ideal_image, &image_metric);
+        psnrhvs = PSNRHVSM(&image, &image_metric);
         printf("MSE = %f\nPSNR = %f\nPSNRHVS = %f\nPSNRHVSM = %f\n", mse, psnr, psnrhvs[0], psnrhvs[1]);
-        save2file(&outFile, "DCTbased", i, mse, psnr, psnrhvs[0], psnrhvs[1], (float(finish-start)/CLOCKS_PER_SEC));
+        save2file(&outFile, "DCTbased", i, 8, mse, psnr, psnrhvs[0], psnrhvs[1],
+                  (float(finish - start) / CLOCKS_PER_SEC));
+        saveImage(image.data, image_width, image_height,
+                  "DCT_filter_" + std::to_string(8) + "_" + std::to_string(i) + "_" + imname + ".png");
+    }
 
-        saveImage(image.data, image_width, image_height, "DCTBased_filter_" + std::to_string(i) + "_" + imname + ".png" );
-    }*/
+    outFile.close();
 
-   // outFile.close();
-
-
-
-    /*free(data);
+    free(data);
     free(ideal_image.data);
     free(image.data);
-    free(noise_image.data);*/
-    //free(im_stack);
+    free(noise_image.data);
+    free(stack_ideal.data);
+    free(image_metric.data);
     return 0;
 }

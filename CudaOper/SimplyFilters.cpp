@@ -199,89 +199,69 @@ __global__ void LiFilter(uint8_t* image, uint32_t* width, uint16_t* window_size,
 }
 
 __global__ void FrostFilter(uint8_t* image, uint32_t* width, uint16_t* window_size, uint16_t* bl_width, float* S){
-    unsigned int x_delay = (blockIdx.x) * (*bl_width);
-    unsigned int y_delay = (blockIdx.y) * (*bl_width);
-    unsigned int x_max = x_delay + *bl_width;
-    unsigned int y_max = y_delay + *bl_width;
+    unsigned int y_delay = blockIdx.x * *bl_width;
 
-    unsigned int bl_pad = int(*window_size / 2);
-    unsigned int size_block = *bl_width + bl_pad * 2;
+    uint8_t *block = new uint8_t[*window_size * *window_size];
 
-    auto *block = new uint8_t[*bl_width * *bl_width];
-    auto *padblock = new uint8_t[size_block * size_block];
-    auto *filtblock = new uint8_t[*window_size * *window_size];
+    uint8_t med = 0;
 
+    uint16_t border = *window_size / 2;
 
-    for(uint32_t i = y_delay, i_b = 0; i < y_max; i++, i_b++){
-        for(uint32_t j = x_delay, j_b = 0; j < x_max; j++, j_b++){
-            block[(i_b * *bl_width) + j_b] = image[(i * *width) + j];
-            //printf("%i %i -> %i \n", i, j, image[(i * *width) + j]);
-        }
-    }
-
-    padarray(block, *bl_width, bl_pad, size_block, padblock);
-
-    free(block);
-    float LV = 0; // Local variance variable
+    float LV = 0, Y_ch, Y_zn, W; // Local variance variable
     float LM = 0; // Local mean
     uint8_t K = 0;
-    float Y_ch = 0, Y_zn = 0, W; // Variable for calculate Y
-    for(uint32_t i = bl_pad, i_im = y_delay; i < size_block - bl_pad; i++, i_im++){
-        for(uint32_t j = bl_pad, j_im = x_delay; j < size_block - bl_pad; j++, j_im++){
-            for(uint32_t y = 0, y_im = i - bl_pad; y < *window_size; y++, y_im++){
-                for(uint32_t x = 0, x_im = j - bl_pad; x < *window_size; x++, x_im++){
-                    filtblock[(x * *window_size) + y] = padblock[(y_im * size_block) + x_im];
+
+    for(uint32_t i = border, i_im = y_delay + border; i < *bl_width - border; i++, i_im++){
+        for(uint32_t j = border; j < *bl_width - border; j++){
+            //printf("%i %i\n", i_im, j);
+            for(uint32_t y = 0, y_im = i_im - border; y < *window_size; y++, y_im++){
+                for(uint32_t x = 0, x_im = j - border; x < *window_size; x++, x_im++){
+                    block[(x * *window_size) + y] = image[(y_im * *bl_width) + x_im];
                     //printf("%i ", filtblock[(x * *window_size) + y]);
                 }
                 //printf("\n");
             }
-            LM = localMean(filtblock, *window_size * *window_size);
-            LV = localVariance(filtblock, *window_size * *window_size, LM);
-            K = bl_pad * (LV / (LM * LM));
+            LM = localMean(block, *window_size * *window_size);
+            LV = localVariance(block, *window_size * *window_size, LM);
+            K = (LV / (LM * LM));
             Y_ch = 0, Y_zn = 0;
             for(uint16_t z = 0; z < *window_size * *window_size; z++){
                 W = exp(-K * S[z]);
-                Y_ch += filtblock[z] * W;
+                Y_ch += block[z] * W;
                 Y_zn += W;
             }
             //printf("%i \n\n", med);
-            image[(i_im * *width) + j_im] = uint8_t(Y_ch/Y_zn);
+            image[(i_im * *width) + j] = uint8_t(Y_ch/Y_zn);
         }
     }
 
-    free(padblock);
-    free(filtblock);
+    free(block);
 }
 
 __global__ void DCT_Filter(uint8_t* image, uint32_t* width, uint16_t* window_size, uint16_t* bl_width, float* DCT_Creator, float* DCT_Creator_T, float* SD){
 
-    unsigned int x_delay = (blockIdx.x) * (*bl_width);
-    unsigned int y_delay = (blockIdx.y) * (*bl_width);
-    unsigned int x_max = x_delay + *bl_width - *window_size;
-    unsigned int y_max = y_delay + *bl_width - *window_size;
+    unsigned int y_delay = blockIdx.x * *bl_width;
+
+    auto *block = new float[*window_size * *window_size];
+    auto *temp = new float[*window_size * *window_size];
 
     float threshold = 2.7 * *SD;
 
-    uint32_t *result_image = (uint32_t*)malloc(sizeof(uint32_t)* *bl_width * *bl_width);
-    uint8_t *num_counter =  (uint8_t*)malloc(sizeof(uint8_t)* *bl_width * *bl_width);
+    uint32_t *result_image = (uint32_t*)malloc(sizeof(uint32_t) * *bl_width * *bl_width);
+    uint8_t *num_counter =  (uint8_t*)malloc(sizeof(uint8_t) * *bl_width * *bl_width);
     for(int i = 0; i < pow(*bl_width, 2); i++) {
         result_image[i] = 0;
         num_counter[i] = 0;
     }
 
-    float *block = new float[*window_size * *window_size];
-    float *temp = new float[*window_size * *window_size];
+    uint16_t border = *window_size / 2;
 
-    for(int i = y_delay, i_r = 0; i <= y_max; i++, i_r++){
-        for (int j = x_delay, j_r = 0; j <= x_max; j++, j_r++) {
-            //printf("%i %i\n", i, j);
-            //printf(" %i \n", *window_size);
-            for(int z = 0; z < *window_size; z++){
-                for(int l = 0; l < *window_size; l++){
-                    block[(z* *window_size) + l] = (float)image[((i+z) * *width) + (j + l)];
-                    //printf("%.1f ", block[(z* *window_size) + l]);
+    for(uint32_t i = border, i_im = y_delay + border; i < *bl_width - border; i++, i_im++){
+        for(uint32_t j = border; j < *bl_width - border; j++){
+            for(uint32_t y = 0, y_im = i_im - border; y < *window_size; y++, y_im++){
+                for(uint32_t x = 0, x_im = j - border; x < *window_size; x++, x_im++){
+                    block[(x * *window_size) + y] = float(image[(y_im * *bl_width) + x_im]);
                 }
-                //printf("\n");
             }
 
             MultiplyMatrix(DCT_Creator, block, temp, *window_size);
@@ -296,19 +276,19 @@ __global__ void DCT_Filter(uint8_t* image, uint32_t* width, uint16_t* window_siz
             MultiplyMatrix(block, DCT_Creator, temp, *window_size);
             MultiplyMatrix(DCT_Creator_T, temp, block, *window_size);
 
-            for(int z = 0; z < *window_size; z++){
-                for(int l = 0; l < *window_size; l++){
-                    result_image[((i_r+z) * *bl_width) + (j_r+l)] += (uint8_t) block[(z * *window_size) + l];
-                    num_counter[((i_r+z) * *bl_width) + (j_r+l)] += 1;
+            for(uint32_t y = 0, y_im = i - border; y < *window_size; y++, y_im++){
+                for(uint32_t x = 0, x_im = j - border; x < *window_size; x++, x_im++){
+                    result_image[(y_im * *bl_width) + x_im] += uint32_t(block[(x * *window_size) + y]);
+                    num_counter[(y_im * *bl_width) + x_im] += 1;
                 }
             }
         }
     }
 
-    for(int i = y_delay, i_r = 0; i < y_max + *window_size; i++, i_r++) {
-        for (int j = x_delay, j_r = 0; j < x_max + *window_size; j++, j_r++){
-            uint8_t t = (uint8_t) (result_image[(i_r * *bl_width) + j_r] / (num_counter[(i_r * *bl_width) + j_r] != 0 ? num_counter[(i_r * *bl_width) + j_r] : 1));
-            image[(i * *width) + j] = t;
+    for(int i = y_delay, i_r = 0; i_r < *bl_width; i++, i_r++) {
+        for (int j = 0; j < *bl_width; j++){
+            uint8_t t = uint8_t(float(result_image[(i_r * *bl_width) + j]) / float(num_counter[(i_r * *bl_width) + j] != 0 ? num_counter[(i_r * *bl_width) + j] : 1));
+            image[(i * *bl_width) + j] = t;
         }
     }
     free(result_image);
@@ -320,19 +300,27 @@ __global__ void DCT_Filter(uint8_t* image, uint32_t* width, uint16_t* window_siz
 
 __host__ float* S_creator(uint16_t block_size){
     float* S = new float[block_size*block_size];
-    if(block_size == 3){
-        S[0] = 1.4142;
-        S[1] = 1;
-        S[2] = 1.4142;
-        S[3] = 1;
-        S[4] = 0;
-        S[5] = 1;
-        S[6] = 1.4142;
-        S[7] = 1;
-        S[8] = 1.4142;
-        return S;
+
+    float point_val = 0;
+
+    for(int i = block_size/2, i_counter = 0; i >= 0; i--, i_counter++){
+        for(int j = block_size/2, j_counter = 0; j >= 0; j--, j_counter++){
+            point_val = sqrt(j_counter + i_counter);
+            S[(i * block_size) + j] = point_val;
+            S[(block_size - i - 1) * block_size + j] = point_val;
+            S[(i * block_size) + (block_size - j - 1)] = point_val;
+            S[((block_size - i - 1) * block_size) + (block_size - j - 1)] = point_val;
+        }
     }
-    return nullptr;
+
+    /*for(int i = 0; i < block_size; i++){
+        for(int j = 0; j < block_size; j++){
+            printf("%f ", S[(i * block_size) + j]);
+        }
+        printf("\n");
+    }*/
+
+    return S;
 }
 
 void CudaFilter(Image* image_, unsigned short block_size, float SD, uint16_t im_bl_size, const std::string filterName){
@@ -378,7 +366,7 @@ void CudaFilter(Image* image_, unsigned short block_size, float SD, uint16_t im_
 
     if(filterName == "Median") MedianFilter<<<16*16, 1>>>(image_dev, width_dev, wind_size_dev, block_size_dev);
     else if(filterName == "Li") LiFilter<<<16*16, 1>>>(image_dev, width_dev, wind_size_dev, block_size_dev, noiseSD);
-    else if(filterName == "Frost") FrostFilter<<<dim3(16, 16), 1>>>(image_dev, width_dev, wind_size_dev, block_size_dev, S_block_dev);
+    else if(filterName == "Frost") FrostFilter<<<16*16, 1>>>(image_dev, width_dev, wind_size_dev, block_size_dev, S_block_dev);
     else if(filterName == "DCT"){
         float* DCT_creator;
         float* DCT_creator_T;
@@ -402,7 +390,7 @@ void CudaFilter(Image* image_, unsigned short block_size, float SD, uint16_t im_
             cudaMemcpy(DCT_creator, &DCT_Creator32[0][0], sizeof(float)*block_size*block_size, cudaMemcpyHostToDevice);
             cudaMemcpy(DCT_creator_T, &DCT_Creator32_T[0][0], sizeof(float)*block_size*block_size, cudaMemcpyHostToDevice);
         }
-        DCT_Filter<<<dim3(16, 16), 1>>>(image_dev, width_dev, wind_size_dev, block_size_dev, DCT_creator, DCT_creator_T, noiseSD);
+        DCT_Filter<<<16*16, 1>>>(image_dev, width_dev, wind_size_dev, block_size_dev, DCT_creator, DCT_creator_T, noiseSD);
     }
 
     else printf("Filter not found\n");
